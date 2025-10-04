@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft服务器监控中心 v1.0.2</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* 全局样式重置与基础配置 */
@@ -417,6 +418,72 @@
             margin-top: 15px;
         }
 
+        /* 临时服务器历史记录样式 */
+        .temp-server-history {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .temp-server-history-item {
+            background-color: #f8fafc;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .temp-server-history-item:hover {
+            background-color: #f1f5f9;
+            transform: translateY(-2px);
+        }
+
+        .temp-server-history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .temp-server-history-address {
+            font-weight: 500;
+            color: #2d3748;
+        }
+
+        .temp-server-history-status {
+            font-size: 0.9rem;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+
+        .temp-server-history-status.online {
+            background-color: rgba(34, 197, 94, 0.1);
+            color: #16a34a;
+        }
+
+        .temp-server-history-status.offline {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: #dc2626;
+        }
+
+        .temp-server-history-details {
+            font-size: 0.9rem;
+            color: #64748b;
+        }
+
+        .temp-server-history-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .temp-server-history-actions button {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+        }
+
         /* 响应式设计 */
         @media (max-width: 768px) {
             .input-group {
@@ -455,6 +522,15 @@
 
             .data-actions {
                 flex-direction: column;
+            }
+
+            .temp-server-history-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .temp-server-history-status {
+                margin-top: 5px;
             }
         }
 
@@ -747,6 +823,12 @@
             <div class="player-list" id="temp-player-list"></div>
             <div class="info-message" id="temp-info"></div>
         </div>
+        
+        <!-- 临时服务器历史记录 -->
+        <div class="temp-server-history" id="temp-server-history" style="display: none;">
+            <h4>历史查询记录</h4>
+            <div id="temp-server-history-list"></div>
+        </div>
     </div>
 
     <!-- 数据管理区域 -->
@@ -849,15 +931,19 @@
                 consecutiveFailures: 0,
                 isFirstCheck: true
             },
+            // 临时服务器历史记录
+            tempServers: [],
             // 配置历史数据保留策略
             maxHistoryEntries: 24 * 7, // 7天，每小时一条记录
-            updateInterval: 3600000    // 每小时记录一次数据
+            updateInterval: 3600000,   // 每小时记录一次数据
+            maxTempServers: 10         // 最多保存10个临时服务器记录
         };
 
         // 本地存储键名
         const STORAGE_KEYS = {
             SERVER_DATA: 'minecraft_monitor_server_data',
-            LAST_UPDATE: 'minecraft_monitor_last_update'
+            LAST_UPDATE: 'minecraft_monitor_last_update',
+            TEMP_SERVERS: 'minecraft_monitor_temp_servers'
         };
 
         // API配置 - 提供多个备用API
@@ -902,6 +988,7 @@
             // 尝试从本地存储加载数据
             const savedData = localStorage.getItem(STORAGE_KEYS.SERVER_DATA);
             const lastUpdate = localStorage.getItem(STORAGE_KEYS.LAST_UPDATE);
+            const savedTempServers = localStorage.getItem(STORAGE_KEYS.TEMP_SERVERS);
             
             if (savedData) {
                 try {
@@ -921,6 +1008,26 @@
             if (lastUpdate) {
                 document.getElementById('last-update').textContent = lastUpdate;
             }
+            
+            if (savedTempServers) {
+                try {
+                    serverData.tempServers = JSON.parse(savedTempServers);
+                    console.log('已从本地存储加载临时服务器数据');
+                    renderTempServerHistory();
+                } catch (e) {
+                    console.error('加载临时服务器数据失败:', e);
+                }
+            }
+        }
+
+        // 保存临时服务器数据到本地存储
+        function saveTempServersToLocalStorage() {
+            try {
+                localStorage.setItem(STORAGE_KEYS.TEMP_SERVERS, JSON.stringify(serverData.tempServers));
+                console.log('临时服务器数据已保存到本地存储');
+            } catch (e) {
+                console.error('保存临时服务器数据到本地存储失败:', e);
+            }
         }
 
         // 保存数据到本地存储
@@ -929,7 +1036,7 @@
                 // 准备要保存的数据
                 const saveData = {};
                 Object.keys(serverData).forEach(serverType => {
-                    if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval') {
+                    if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval' && serverType !== 'maxTempServers' && serverType !== 'tempServers') {
                         saveData[serverType] = {
                             history: serverData[serverType].history
                         };
@@ -950,10 +1057,13 @@
             try {
                 const dataToExport = {};
                 Object.keys(serverData).forEach(serverType => {
-                    if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval') {
+                    if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval' && serverType !== 'maxTempServers' && serverType !== 'tempServers') {
                         dataToExport[serverType] = serverData[serverType].history;
                     }
                 });
+                
+                // 添加临时服务器数据
+                dataToExport.tempServers = serverData.tempServers;
                 
                 const dataStr = JSON.stringify(dataToExport, null, 2);
                 const dataBlob = new Blob([dataStr], {type: 'application/json'});
@@ -980,16 +1090,22 @@
             if (confirm('确定要清除所有本地存储的服务器数据吗？此操作不可恢复。')) {
                 try {
                     Object.keys(serverData).forEach(serverType => {
-                        if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval') {
+                        if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval' && serverType !== 'maxTempServers' && serverType !== 'tempServers') {
                             serverData[serverType].history = [];
                         }
                     });
                     
+                    serverData.tempServers = [];
+                    
                     localStorage.removeItem(STORAGE_KEYS.SERVER_DATA);
                     localStorage.removeItem(STORAGE_KEYS.LAST_UPDATE);
+                    localStorage.removeItem(STORAGE_KEYS.TEMP_SERVERS);
                     
                     // 重新初始化图表
                     initCharts();
+                    
+                    // 更新临时服务器历史显示
+                    renderTempServerHistory();
                     
                     document.getElementById('data-info').textContent = '数据已清除！';
                     setTimeout(() => {
@@ -1007,18 +1123,102 @@
             let serverCount = 0;
             
             Object.keys(serverData).forEach(serverType => {
-                if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval') {
+                if (serverType !== 'maxHistoryEntries' && serverType !== 'updateInterval' && serverType !== 'maxTempServers' && serverType !== 'tempServers') {
                     totalEntries += serverData[serverType].history.length;
                     serverCount++;
                 }
             });
             
-            const info = `共监控 ${serverCount} 个服务器，存储了 ${totalEntries} 条历史记录`;
+            const tempServerCount = serverData.tempServers.length;
+            const info = `共监控 ${serverCount} 个服务器，存储了 ${totalEntries} 条历史记录，${tempServerCount} 个临时服务器`;
             document.getElementById('data-info').textContent = info;
             
             setTimeout(() => {
                 document.getElementById('data-info').textContent = '';
             }, 5000);
+        }
+
+        // 渲染临时服务器历史记录
+        function renderTempServerHistory() {
+            const historyList = document.getElementById('temp-server-history-list');
+            const historyContainer = document.getElementById('temp-server-history');
+            
+            if (serverData.tempServers.length === 0) {
+                historyContainer.style.display = 'none';
+                return;
+            }
+            
+            historyContainer.style.display = 'block';
+            historyList.innerHTML = '';
+            
+            // 按最后查询时间倒序排列
+            const sortedServers = [...serverData.tempServers].sort((a, b) => 
+                new Date(b.lastChecked) - new Date(a.lastChecked)
+            );
+            
+            sortedServers.forEach((server, index) => {
+                const serverItem = document.createElement('div');
+                serverItem.className = 'temp-server-history-item';
+                serverItem.innerHTML = `
+                    <div class="temp-server-history-header">
+                        <div class="temp-server-history-address">${server.address}</div>
+                        <div class="temp-server-history-status ${server.online ? 'online' : 'offline'}">
+                            ${server.online ? '在线' : '离线'}
+                        </div>
+                    </div>
+                    <div class="temp-server-history-details">
+                        玩家: ${server.players || '0'}/${server.maxPlayers || '0'} | 延迟: ${server.latency || '-'}ms
+                    </div>
+                    <div class="temp-server-history-actions">
+                        <button onclick="loadTempServerFromHistory('${server.address}')">重新查询</button>
+                        <button class="secondary" onclick="removeTempServerFromHistory('${server.address}')">删除</button>
+                    </div>
+                `;
+                historyList.appendChild(serverItem);
+            });
+        }
+
+        // 从历史记录中加载临时服务器
+        function loadTempServerFromHistory(address) {
+            document.getElementById('temp-address').value = address;
+            checkTempServer();
+        }
+
+        // 从历史记录中删除临时服务器
+        function removeTempServerFromHistory(address) {
+            serverData.tempServers = serverData.tempServers.filter(server => server.address !== address);
+            saveTempServersToLocalStorage();
+            renderTempServerHistory();
+        }
+
+        // 添加或更新临时服务器记录
+        function addOrUpdateTempServer(address, data) {
+            const existingIndex = serverData.tempServers.findIndex(server => server.address === address);
+            
+            const serverRecord = {
+                address: address,
+                online: data.online,
+                players: data.online ? data.players.now : 0,
+                maxPlayers: data.online ? data.players.max : 0,
+                latency: data.latency,
+                lastChecked: new Date().toISOString()
+            };
+            
+            if (existingIndex !== -1) {
+                // 更新现有记录
+                serverData.tempServers[existingIndex] = serverRecord;
+            } else {
+                // 添加新记录
+                serverData.tempServers.unshift(serverRecord);
+                
+                // 如果超过最大数量，删除最旧的记录
+                if (serverData.tempServers.length > serverData.maxTempServers) {
+                    serverData.tempServers.pop();
+                }
+            }
+            
+            saveTempServersToLocalStorage();
+            renderTempServerHistory();
         }
 
         // 初始化图表
@@ -1324,7 +1524,7 @@
             // 标记为首次查询
             document.getElementById('temp-info').textContent = '';
             
-            checkServer(ip, port, 'temp-status', 'temp-players', 'temp-latency', 'temp-player-list', 'temp');
+            checkServer(ip, port, 'temp-status', 'temp-players', 'temp-latency', 'temp-player-list', 'temp', address);
             
             // 更新最后检查时间
             document.getElementById('last-update').textContent = new Date().toLocaleString();
@@ -1386,7 +1586,7 @@
         }
         
         // 通用的服务器检查函数，带多API重试机制
-        function checkServer(ip, port, statusId, playersId, latencyId, playerListId, serverType = null) {
+        function checkServer(ip, port, statusId, playersId, latencyId, playerListId, serverType = null, originalAddress = null) {
             const statusElement = document.getElementById(statusId);
             const playersElement = document.getElementById(playersId);
             const latencyElement = document.getElementById(latencyId);
@@ -1432,6 +1632,15 @@
                         });
                     } else if (serverType === 'temp') {
                         infoElement.textContent = '因为技术原因，初次查询延迟过高为正常现象，请刷新后重试';
+                        
+                        // 保存临时服务器记录
+                        if (originalAddress) {
+                            addOrUpdateTempServer(originalAddress, {
+                                online: false,
+                                players: { now: 0, max: 0 },
+                                latency: 0
+                            });
+                        }
                     }
                     
                     return Promise.reject(new Error('所有API提供者均无法访问'));
@@ -1487,6 +1696,11 @@
                                 serverData[serverType].isFirstCheck = false;
                                 
                                 saveServerHistory(serverType, data);
+                            }
+                            
+                            // 如果是临时服务器，保存记录
+                            if (serverType === 'temp' && originalAddress) {
+                                addOrUpdateTempServer(originalAddress, data);
                             }
                             
                             return Promise.resolve();
